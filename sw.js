@@ -1,4 +1,4 @@
-const CACHE_NAME = 'student-data-v1-new-repo';
+const CACHE_NAME = 'student-data-v2-new-repo'; // Bumped version to force cache refresh!
 
 const urlsToCache = [
   './',
@@ -9,11 +9,15 @@ const urlsToCache = [
   // UNCOMMENT the next line if you upload admin.html to the same repository
   // './admin.html', 
 
-  // Images (Make sure you upload these!)
+  // 🚀 NEW: Fonts and Backgrounds cached for completely offline preview generation
+  './OdiaFont.ttf',
+  './background.png',
+
+  // Images 
   './icon-192.png',
   './icon-512.png',
 
-  // External Libraries (These are fine as absolute URLs)
+  // External Libraries
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
   'https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js',
@@ -33,17 +37,35 @@ self.addEventListener('install', event => {
   );
 });
 
+// 🚀 NEW: Dynamic Network-First fallback so bugs get patched on users' phones immediately
 self.addEventListener('fetch', event => {
-  event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        if (response) return response;
-        return fetch(event.request).then(networkResponse => {
-            // Optional: Dynamic caching for things not in the list
-            return networkResponse;
-        });
+  const req = event.request;
+
+  // Use Network-First for HTML files (gets bug fixes instantly)
+  if (req.headers.get('accept').includes('text/html')) {
+    event.respondWith(
+      fetch(req)
+        .then(networkResponse => {
+           const responseClone = networkResponse.clone();
+           caches.open(CACHE_NAME).then(cache => cache.put(req, responseClone));
+           return networkResponse;
+        })
+        .catch(() => {
+           // If completely offline, fall back to the cached HTML
+           return caches.match(req);
+        })
+    );
+  } else {
+    // For all other assets (JS, Images, Fonts), keep Cache-First for speed and offline capabilities
+    event.respondWith(
+      caches.match(req).then(cachedResponse => {
+        if (cachedResponse) {
+            return cachedResponse;
+        }
+        return fetch(req);
       })
-  );
+    );
+  }
 });
 
 self.addEventListener('activate', event => {

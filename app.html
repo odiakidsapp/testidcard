@@ -216,20 +216,54 @@
             reader.onerror = reject;
         });
 
+        // 🚀 NEW: Universal Image Compressor to Fix 1MB Firestore Quota Limit
+        function compressImageToDataURL(imgElement) {
+            return new Promise((resolve) => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                const MAX_WIDTH = 300;
+                let width = imgElement.width;
+                let height = imgElement.height;
+                
+                if (width > MAX_WIDTH) {
+                    height = Math.round((height * MAX_WIDTH) / width);
+                    width = MAX_WIDTH;
+                }
+                
+                canvas.width = width;
+                canvas.height = height;
+                ctx.drawImage(imgElement, 0, 0, width, height);
+                
+                // Compress as JPEG at 60% quality (~25KB output)
+                resolve(canvas.toDataURL('image/jpeg', 0.6));
+            });
+        }
+
         // PRELOAD ASSETS FOR PREVIEW
         async function loadPreviewAssets() {
             try {
                 const f = new FontFace('OdiaFont', await (await fetch('OdiaFont.ttf')).arrayBuffer());
                 await f.load(); document.fonts.add(f); window.assets.fontLoaded = true;
-            } catch(e) { console.log("OdiaFont.ttf not found for preview. Ensure it's uploaded."); }
+            } catch(e) { console.log("OdiaFont.ttf not found for preview."); }
 
             try {
                 const img = new Image();
                 img.src = URL.createObjectURL(await (await fetch('background.png')).blob());
                 img.onload = () => window.assets.template = img;
-            } catch(e) { console.log("background.png not found for preview. Ensure it's uploaded."); }
+            } catch(e) { console.log("background.png not found for preview."); }
         }
         loadPreviewAssets();
+
+        // 🚀 NEW: Background Offline Sync Processor
+        window.addEventListener('online', () => {
+            if(!db) return;
+            const tx = db.transaction(['students'], 'readonly');
+            tx.objectStore('students').getAll().onsuccess = e => {
+                const unsynced = e.target.result.filter(s => !s.synced);
+                unsynced.forEach(s => syncToFirebase(s));
+            };
+        });
 
         // --- SCHOOL LOGIC ---
         document.getElementById('hmSignInput').onchange = (e) => {
@@ -264,35 +298,52 @@
 
             if(!name) return alert("Enter School Name");
             
-            document.getElementById('addSchoolBtn').textContent = "Processing...";
-            
-            let signBase64 = null;
-            if(signFile) {
-                signBase64 = await blobToBase64(signFile);
-            }
+            // 🚀 NEW: Check for duplicate school name prevent overwrite trap
+            const checkTx = db.transaction(['schools'], 'readonly');
+            checkTx.objectStore('schools').get(name).onsuccess = async (e) => {
+                if (e.target.result) {
+                    alert("A school with this exact name already exists. Please add a Village or Block name to make it unique (e.g., 'Saraswati Sishu Mandir - Cuttack').");
+                    return; 
+                }
+                
+                document.getElementById('addSchoolBtn').textContent = "Processing...";
+                
+                let signBase64 = null;
+                if(signFile) signBase64 = await blobToBase64(signFile);
 
-            const schoolObj = {
-                name: name,
-                phone: phone,
-                block: block,
-                district: district,
-                pin: pin,
-                udise: udise,
-                hmSignature: signBase64,
-                createdAt: Date.now()
+                const schoolObj = {
+                    name: name,
+                    phone: phone,
+                    block: block,
+                    district: district,
+                    pin: pin,
+                    udise: udise,
+                    hmSignature: signBase64,
+                    createdAt: Date.now()
+                };
+
+                const tx = db.transaction(['schools'], 'readwrite');
+                tx.objectStore('schools').put(schoolObj);
+                tx.oncomplete = () => { enterSchool(schoolObj); };
             };
-
-            const tx = db.transaction(['schools'], 'readwrite');
-            tx.objectStore('schools').put(schoolObj);
-            tx.oncomplete = () => { enterSchool(schoolObj); };
         };
 
         function hardResetApp() {
-            if(!confirm('WARNING: This will delete the school and all student data from this device. Continue?')) return;
-            const tx = db.transaction(['schools', 'students'], 'readwrite');
-            tx.objectStore('schools').clear();
-            tx.objectStore('students').clear();
-            tx.oncomplete = () => { location.reload(); };
+            // 🚀 NEW: Protect offline users from accidentally deleting unsynced records
+            const checkTx = db.transaction(['students'], 'readonly');
+            checkTx.objectStore('students').getAll().onsuccess = e => {
+                const unsynced = e.target.result.filter(s => !s.synced);
+                if (unsynced.length > 0) {
+                    alert(`WARNING: You have ${unsynced.length} unsynced students! Please connect to the internet and let them sync before resetting.`);
+                    return;
+                }
+                
+                if(!confirm('WARNING: This will delete the school and all student data from this device. Continue?')) return;
+                const tx = db.transaction(['schools', 'students'], 'readwrite');
+                tx.objectStore('schools').clear();
+                tx.objectStore('students').clear();
+                tx.oncomplete = () => { location.reload(); };
+            };
         }
 
         function enterSchool(schoolObj) {
@@ -350,13 +401,13 @@
             }
             tx.objectStore('schools').put(updatedSchool);
 
+            // 🚀 NEW: Replaced Cursor Mutation logic with safer getAll() to prevent skipping updates
             if(oldName !== newName) {
                 const stStore = tx.objectStore('students');
                 const idx = stStore.index('schoolName');
-                idx.openCursor(IDBKeyRange.only(oldName)).onsuccess = (e) => {
-                    const cursor = e.target.result;
-                    if(cursor) {
-                        const s = cursor.value;
+                idx.getAll(oldName).onsuccess = (e) => {
+                    const studentsToUpdate = e.target.result;
+                    studentsToUpdate.forEach(s => {
                         s.schoolName = newName;
                         s.hmSignature = updatedSchool.hmSignature;
                         s.block = updatedSchool.block;
@@ -364,9 +415,8 @@
                         s.pin = updatedSchool.pin;
                         s.udise = updatedSchool.udise;
                         s.hmPhone = updatedSchool.phone;
-                        cursor.update(s);
-                        cursor.continue();
-                    }
+                        stStore.put(s); 
+                    });
                 };
             }
 
@@ -448,16 +498,13 @@
                 return alert("Please take or upload a photo first to see preview!");
             }
 
-            // Dimensions exactly as in admin
             const CARD_W = 638, CARD_H = 1012;
             const cvs = document.createElement('canvas');
             cvs.width = CARD_W; cvs.height = CARD_H;
             const ctx = cvs.getContext('2d');
 
-            // 1. Draw Background
             ctx.drawImage(window.assets.template, 0, 0, CARD_W, CARD_H);
 
-            // 2. Draw Header
             const centerHeadX = 121 + (611 - 121) / 2;
             ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center'; 
             let fs = 45; ctx.font = `bold ${fs}px OdiaFont`;
@@ -477,7 +524,6 @@
                 ctx.fillText('UDISE- ' + toOdiaDigits(currentSchoolData.udise), centerHeadX, 130);
             }
 
-            // 3. Signature
             if(currentSchoolData.hmSignature) {
                 const signImg = new Image(); signImg.src = currentSchoolData.hmSignature;
                 await new Promise(r => signImg.onload=r);
@@ -486,19 +532,16 @@
                 ctx.drawImage(cleanSign, 434, 850, cleanSign.width * ratio, cleanSign.height * ratio);
             }
 
-            // 4. Photo
             const photo = new Image(); photo.src = base64;
             await new Promise(r => photo.onload=r);
             const px = 222, py = 250, pw = 187, ph = 225, border = 3;
             ctx.fillStyle = '#000'; ctx.fillRect(px - border, py - border, pw + border*2, ph + border*2);
-            // Basic crop to center (no AI in app.html to save memory)
             const srcRatio = photo.width / photo.height; const destRatio = pw / ph;
             let sx=0, sy=0, sw=photo.width, sh=photo.height;
             if(srcRatio > destRatio) { sw = photo.height * destRatio; sx = (photo.width - sw)/2; } 
             else { sh = photo.width / destRatio; sy = (photo.height - sh)/2; }
             ctx.drawImage(photo, sx, sy, sw, sh, px, py, pw, ph);
 
-            // 5. Texts
             ctx.fillStyle = '#000'; ctx.textAlign = 'left'; ctx.font = `38px OdiaFont`;
             const tx = 227;
             let dob = document.getElementById('sDob').value || '';
@@ -516,7 +559,6 @@
                 ctx.fillText(blood, 480, 383);
             }
 
-            // 6. DRAW WATERMARK
             ctx.save();
             ctx.translate(CARD_W/2, CARD_H/2);
             ctx.rotate(-Math.PI / 4);
@@ -524,19 +566,17 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             
-            // Draw repeating watermark grid covering the entire canvas
             const diag = Math.sqrt(CARD_W*CARD_W + CARD_H*CARD_H);
             for(let x = -diag; x <= diag; x += 350) {
                 for(let y = -diag; y <= diag; y += 150) {
                     ctx.fillStyle = 'rgba(255, 0, 0, 0.25)';
                     ctx.fillText('PREVIEW ONLY', x, y);
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)'; // Drop shadow
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
                     ctx.fillText('PREVIEW ONLY', x+2, y+2);
                 }
             }
             ctx.restore();
 
-            // Display
             document.getElementById('renderedPreviewImg').src = cvs.toDataURL('image/png');
             document.getElementById('cardPreviewModal').style.display = 'flex';
         };
@@ -577,6 +617,7 @@
                 photoBase64: base64,
                 photoName: `${Date.now()}.jpg`,
                 synced: false,
+                lastModified: Date.now(), // 🚀 NEW: Tracking updates to support Admin Quick Sync
                 submittedAt: firebase.firestore.FieldValue.serverTimestamp()
             };
 
@@ -640,17 +681,26 @@
             document.getElementById('cameraVideo').srcObject = stream;
         };
 
+        // 🚀 NEW: Aggressively compress live camera shots to protect Firestore Limits
         document.getElementById('snap').onclick = () => {
             const vid = document.getElementById('cameraVideo');
-            const can = document.getElementById('canvas');
-            can.width = vid.videoWidth; can.height = vid.videoHeight;
-            can.getContext('2d').drawImage(vid, 0, 0);
-            can.toBlob(blob => {
-                currentPhotoBlob = blob;
-                document.getElementById('preview').src = URL.createObjectURL(blob);
+            const img = new Image();
+            
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = vid.videoWidth; 
+            tempCanvas.height = vid.videoHeight;
+            tempCanvas.getContext('2d').drawImage(vid, 0, 0);
+            
+            img.src = tempCanvas.toDataURL('image/jpeg');
+            img.onload = async () => {
+                const compressedBase64 = await compressImageToDataURL(img);
+                document.getElementById('preview').src = compressedBase64;
                 document.getElementById('preview').style.display = 'block';
+                
+                const response = await fetch(compressedBase64);
+                currentPhotoBlob = await response.blob();
                 closeCam();
-            }, 'image/jpeg', 0.8);
+            };
         };
 
         function closeCam() {
@@ -659,11 +709,21 @@
             document.getElementById('cameraModal').style.display = 'none';
         }
 
+        // 🚀 NEW: Aggressively compress gallery uploads to protect Firestore Limits
         document.getElementById('fileInput').onchange = e => {
-            if(e.target.files[0]) {
-                currentPhotoBlob = e.target.files[0];
-                document.getElementById('preview').src = URL.createObjectURL(currentPhotoBlob);
-                document.getElementById('preview').style.display = 'block';
+            const file = e.target.files[0];
+            if (file) {
+                const img = new Image();
+                img.src = URL.createObjectURL(file);
+                img.onload = async () => {
+                    const compressedBase64 = await compressImageToDataURL(img);
+                    document.getElementById('preview').src = compressedBase64;
+                    document.getElementById('preview').style.display = 'block';
+                    
+                    const response = await fetch(compressedBase64);
+                    currentPhotoBlob = await response.blob();
+                    URL.revokeObjectURL(img.src);
+                };
             }
         };
 

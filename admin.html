@@ -229,7 +229,6 @@ function toOdiaClass(str) {
     if (s === '8' || s === 'class 8' || s === 'class-8') return 'ଅଷ୍ଟମ';
     if (s === '9' || s === 'class 9' || s === 'class-9') return 'ନବମ';
     if (s === '10' || s === 'class 10' || s === 'class-10') return 'ଦଶମ';
-    // ଯଦି ଅନ୍ୟ କିଛି ଥାଏ ତେବେ କେବଳ ସଂଖ୍ୟାକୁ ଓଡ଼ିଆ କରିଦେବ
     return toOdiaDigits(str);
 }
 
@@ -243,7 +242,6 @@ const blobToBase64 = blob => new Promise((resolve, reject) => {
 
 /* ---------- STATE LOGIC (CACHED FOR QUOTA SAVING) ---------- */
 let db = null;
-// Load cached dashboard data from browser storage to save Firebase reads
 let schoolsMap = JSON.parse(localStorage.getItem('adminSchoolsMap')) || {};
 let lastSyncId = Number(localStorage.getItem('adminLastSyncId')) || 0;
 let currentSchoolStudents = [];
@@ -295,23 +293,23 @@ try{
   firebase.initializeApp(firebaseConfig);
   db = firebase.firestore();
   
-  // Start up with Smart Sync
   initDashboard();
   loadAutoAssets();
 } catch(e){ console.error(e); alert('Firebase error: '+e.message); }
 
 /* ---------- SMART DATA LOGIC ---------- */
 function initDashboard() {
-    renderDashboard(); // Show whatever is in cache instantly (0 quota cost)
-    quickSync();       // Ask firebase ONLY for new students
+    renderDashboard(); 
+    quickSync();       
 }
 
-// Fetches ONLY new documents added since last check
+// 🚀 NEW: Quick Sync updated to check 'lastModified' to catch invisible edits!
 function quickSync() {
     const btn = document.getElementById('quickSyncBtn');
     if(btn) btn.textContent = "Syncing...";
     
-    db.collection('students').where('id', '>', lastSyncId).get().then(qs => {
+    // We check lastModified instead of ID so we catch recently edited documents
+    db.collection('students').where('lastModified', '>', lastSyncId).get().then(qs => {
         if(!qs.empty) {
             qs.forEach(doc => {
                 const d = doc.data();
@@ -323,11 +321,11 @@ function quickSync() {
                             block: d.block || '', district: d.district || '',
                             pin: d.pin || '', udise: d.udise || '', phone: d.hmPhone || d.mobile || '',
                             signature: d.hmSignature || '',
-                            latestActivity: Number(d.id) || 0
+                            latestActivity: Number(d.lastModified) || Number(d.id) || 0
                         };
                     }
                     schoolsMap[sName].count++;
-                    schoolsMap[sName].latestActivity = Math.max(schoolsMap[sName].latestActivity, Number(d.id) || 0);
+                    schoolsMap[sName].latestActivity = Math.max(schoolsMap[sName].latestActivity, Number(d.lastModified) || Number(d.id) || 0);
                     
                     const sm = schoolsMap[sName];
                     if(!sm.signature && d.hmSignature) sm.signature = d.hmSignature;
@@ -337,9 +335,8 @@ function quickSync() {
                     if(!sm.udise && d.udise) sm.udise = d.udise;
                     if(!sm.phone && d.hmPhone) sm.phone = d.hmPhone;
                 }
-                lastSyncId = Math.max(lastSyncId, Number(d.id) || 0);
+                lastSyncId = Math.max(lastSyncId, Number(d.lastModified) || Number(d.id) || 0);
             });
-            // Update cache
             localStorage.setItem('adminSchoolsMap', JSON.stringify(schoolsMap));
             localStorage.setItem('adminLastSyncId', lastSyncId.toString());
             renderDashboard();
@@ -351,7 +348,6 @@ function quickSync() {
     });
 }
 
-// Force fetches entire database (Use Quota)
 function fullResync() {
     if(!confirm('This will read the ENTIRE database and consume your free Firebase quota. Continue?')) return;
     
@@ -373,11 +369,11 @@ function fullResync() {
                         block: d.block || '', district: d.district || '',
                         pin: d.pin || '', udise: d.udise || '', phone: d.hmPhone || d.mobile || '',
                         signature: d.hmSignature || '',
-                        latestActivity: Number(d.id) || 0
+                        latestActivity: Number(d.lastModified) || Number(d.id) || 0
                     };
                 }
                 schoolsMap[sName].count++;
-                schoolsMap[sName].latestActivity = Math.max(schoolsMap[sName].latestActivity, Number(d.id) || 0);
+                schoolsMap[sName].latestActivity = Math.max(schoolsMap[sName].latestActivity, Number(d.lastModified) || Number(d.id) || 0);
                 
                 const sm = schoolsMap[sName];
                 if(!sm.signature && d.hmSignature) sm.signature = d.hmSignature;
@@ -387,7 +383,7 @@ function fullResync() {
                 if(!sm.udise && d.udise) sm.udise = d.udise;
                 if(!sm.phone && d.hmPhone) sm.phone = d.hmPhone;
             }
-            lastSyncId = Math.max(lastSyncId, Number(d.id) || 0);
+            lastSyncId = Math.max(lastSyncId, Number(d.lastModified) || Number(d.id) || 0);
         });
         
         localStorage.setItem('adminSchoolsMap', JSON.stringify(schoolsMap));
@@ -404,7 +400,6 @@ function renderDashboard(){
     const grid = document.getElementById('schoolGrid');
     grid.innerHTML = '';
     
-    // Sort by latest added/edited instead of alphabetically
     const names = Object.keys(schoolsMap).sort((a, b) => schoolsMap[b].latestActivity - schoolsMap[a].latestActivity);
     
     if(names.length === 0){ grid.innerHTML = '<p>No schools found. Try Quick Sync.</p>'; return; }
@@ -435,17 +430,14 @@ function renderDashboard(){
 function showDashboard(){
     document.getElementById('detailView').classList.add('hidden');
     document.getElementById('dashboardView').classList.remove('hidden');
-    // Refresh dashboard visuals to reflect any edits/deletions made while in detail view
     renderDashboard();
 }
 
-// Targeted fetching: ONLY fetch this school's data!
 function openSchoolDetail(name){
     let s = schoolsMap[name];
     if(!s) s = schoolsMap[Object.keys(schoolsMap).find(k => k === name)];
     if(!s) return;
     
-    // Setup Header UI immediately
     document.getElementById('viewSchoolName').textContent = s.name;
     document.getElementById('viewAddress').textContent = `${s.block}, ${s.district} - ${s.pin}`;
     document.getElementById('viewContact').textContent = `📞 ${s.phone}`;
@@ -454,22 +446,16 @@ function openSchoolDetail(name){
     if(s.signature) { sign.src = s.signature; sign.style.display='block'; } 
     else { sign.style.display='none'; }
     
-    // Show view and loading state
     document.getElementById('dashboardView').classList.add('hidden');
     document.getElementById('detailView').classList.remove('hidden');
     document.getElementById('studentTable').querySelector('tbody').innerHTML = '<tr><td colspan="10" style="text-align:center;">Loading students from Firebase...</td></tr>';
     
-    // 🔥 TARGETED QUERY (Only reads documents for THIS school)
     db.collection('students').where('schoolName', '==', name).get().then(qs => {
         currentSchoolStudents = [];
         qs.forEach(doc => currentSchoolStudents.push(doc.data()));
-        
-        // Sort newest first
         currentSchoolStudents.sort((a,b) => b.id - a.id);
-        
         renderTable();
         
-        // Self-Healing Cache Logic: If students were deleted elsewhere, correct our local map count
         if(s.count !== currentSchoolStudents.length) {
             schoolsMap[name].count = currentSchoolStudents.length;
             if(schoolsMap[name].count === 0) delete schoolsMap[name];
@@ -570,7 +556,6 @@ async function initializeFaceDetector(){
 }
 initializeFaceDetector();
 
-/* ---------- UTILS: SMART TRANSPARENCY ---------- */
 function removeWhiteBg(img) {
     const c = document.createElement('canvas');
     c.width = img.width; c.height = img.height;
@@ -582,16 +567,12 @@ function removeWhiteBg(img) {
         const r = d[i], g = d[i+1], b = d[i+2];
         const bright = (r+g+b)/3;
         
-        // Smoother background removal:
-        // Only pure white/light gray is fully removed.
         if(bright > 210) { 
             d[i+3] = 0; 
         } 
-        // Soft blend for the edges to prevent harsh cutouts
         else if(bright > 150) { 
             d[i+3] = Math.max(0, 255 - (bright - 150) * 4); 
         }
-        // Notice we NO LONGER force pixels to black. This preserves blue ink!
     }
     cx.putImageData(imgData, 0, 0);
     return c;
@@ -605,10 +586,8 @@ async function drawCard(s) {
     canvas.width = CARD_W; canvas.height = CARD_H;
     ctx.clearRect(0,0,CARD_W,CARD_H);
 
-    // 1. Background
     ctx.drawImage(window.assets.template, 0, 0, CARD_W, CARD_H);
 
-    // 2. School Details
     if(window.assets.mode === 'auto') {
         const sm = schoolsMap[s.schoolName];
         const centerHeadX = SCHOOL_NAME_POS.x + (SCHOOL_NAME_POS.maxX - SCHOOL_NAME_POS.x) / 2;
@@ -626,7 +605,6 @@ async function drawCard(s) {
         if(sm && sm.pin) addrTxt += ' - ' + toOdiaDigits(sm.pin);
         ctx.fillText(addrTxt, centerHeadX, ADDR_POS.y);
 
-        // UDISE is strictly printed ONLY in auto mode (skips if manual background is uploaded)
         if(sm && sm.udise) {
             ctx.font = '26px OdiaFont';
             ctx.fillText('UDISE- ' + toOdiaDigits(sm.udise), centerHeadX, ADDR_POS.y + 36);
@@ -641,7 +619,6 @@ async function drawCard(s) {
         }
     }
 
-    // 3. Photo & Text
     const tplW = window.assets.template.width || CARD_W;
     const scale = CARD_W / tplW;
     const px = Math.round(222 * scale), py = Math.round(250 * scale);
@@ -692,12 +669,11 @@ document.getElementById('downloadRawBtn').onclick = async () => {
     const btn = document.getElementById('downloadRawBtn');
     btn.disabled = true; btn.textContent = "Fetching DB...";
     try {
-        // Must fetch all docs to create a global backup
         const qs = await db.collection('students').get();
         const data = [];
         qs.forEach(doc => {
             const d = doc.data();
-            delete d.photoBase64; // Stripping base64 to keep excel small
+            delete d.photoBase64; 
             delete d.hmSignature;
             data.push(d);
         });
@@ -808,7 +784,8 @@ document.getElementById('saveSchoolBtn').onclick = async () => {
         block: document.getElementById('esBlock').value.trim(),
         district: document.getElementById('esDistrict').value.trim(),
         pin: document.getElementById('esPin').value.trim(),
-        udise: document.getElementById('esUdise').value.trim()
+        udise: document.getElementById('esUdise').value.trim(),
+        lastModified: Date.now() // Trigger QuickSync updates
     };
     
     const file = document.getElementById('esSignInput').files[0];
@@ -818,13 +795,23 @@ document.getElementById('saveSchoolBtn').onclick = async () => {
     
     try {
         const snap = await db.collection('students').where('schoolName', '==', oldName).get();
-        const batch = db.batch();
-        snap.docs.forEach(doc => { batch.update(doc.ref, updates); });
-        await batch.commit();
+        const docs = snap.docs;
+        
+        // 🚀 NEW: Chunk Batch operations so they don't break the 500-limit
+        const chunks = [];
+        for (let i = 0; i < docs.length; i += 400) {
+            chunks.push(docs.slice(i, i + 400));
+        }
+
+        for (const chunk of chunks) {
+            const batch = db.batch();
+            chunk.forEach(doc => batch.update(doc.ref, updates));
+            await batch.commit();
+        }
+
         alert("School updated successfully!");
         document.getElementById('editSchoolModal').style.display='none';
         
-        // Update Local Cache
         if(oldName !== newName) {
              schoolsMap[newName] = schoolsMap[oldName];
              schoolsMap[newName].name = newName;
@@ -858,11 +845,9 @@ function openEditModal(id){
 function del(id){
     if(!confirm('Delete this student?')) return;
     db.collection('students').doc(id.toString()).delete().then(() => {
-        // Remove from local list without reloading entire DB
         currentSchoolStudents = currentSchoolStudents.filter(x => x.id != id);
         renderTable(); 
         
-        // Auto-correct Dashboard count cache
         const sName = document.getElementById('viewSchoolName').textContent;
         if(schoolsMap[sName]) {
              schoolsMap[sName].count = currentSchoolStudents.length;
@@ -880,7 +865,8 @@ document.getElementById('saveEditBtn').onclick = async () => {
         roll: document.getElementById('editRoll').value,
         dob: document.getElementById('editDob').value,
         bloodGroup: document.getElementById('editBlood').value,
-        mobile: document.getElementById('editPhone').value
+        mobile: document.getElementById('editPhone').value,
+        lastModified: Date.now() // Track for QuickSync!
     };
     try {
         await db.collection('students').doc(id.toString()).update(data);
@@ -928,13 +914,12 @@ document.getElementById('previewEditBtn').onclick = async () => {
     pctx.textAlign = 'center';
     pctx.textBaseline = 'middle';
     
-    // Draw repeating watermark grid covering the entire canvas
     const diag = Math.sqrt(CARD_W*CARD_W + CARD_H*CARD_H);
     for(let x = -diag; x <= diag; x += 350) {
         for(let y = -diag; y <= diag; y += 150) {
             pctx.fillStyle = 'rgba(255, 0, 0, 0.25)';
             pctx.fillText('PREVIEW ONLY', x, y);
-            pctx.fillStyle = 'rgba(255, 255, 255, 0.4)'; // Drop shadow
+            pctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
             pctx.fillText('PREVIEW ONLY', x+2, y+2);
         }
     }

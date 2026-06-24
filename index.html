@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Data App</title>
     <link rel="manifest" href="manifest.json">
+    <script>
+        // PWA "Infinite Install" Fix: Redirect immediately if already installed
+        if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
+            window.location.replace('app.html');
+        }
+    </script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -40,122 +46,88 @@
             color: white;
             font-size: 40px;
             font-weight: bold;
-            box-shadow: 0 4px 15px rgba(0,86,179,0.3);
+            box-shadow: 0 4px 10px rgba(0,86,179,0.3);
         }
 
-        h2 { margin: 0 0 10px 0; color: #333; }
-        p { color: #666; font-size: 14px; margin-bottom: 30px; line-height: 1.5; }
+        h1 { color: #333; margin-bottom: 10px; font-size: 24px; }
+        p { color: #666; margin-bottom: 30px; font-size: 15px; line-height: 1.5; }
 
         .btn {
-            width: 100%;
-            padding: 15px;
+            background: #0056b3;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
             font-size: 16px;
             font-weight: bold;
-            border: none;
-            border-radius: 10px;
             cursor: pointer;
-            transition: all 0.2s;
-            display: none; /* Hidden by default until logic decides */
+            width: 100%;
+            box-sizing: border-box;
+            transition: background 0.3s ease, transform 0.1s ease;
         }
 
-        .btn-install { background-color: #28a745; color: white; box-shadow: 0 4px 10px rgba(40,167,69,0.3); }
-        .btn-install:active { transform: scale(0.98); }
-
-        .btn-open { background-color: #0056b3; color: white; box-shadow: 0 4px 10px rgba(0,86,179,0.3); }
-        .btn-open:active { transform: scale(0.98); }
-
-        .loader {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #0056b3;
-            border-radius: 50%;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
-            display: inline-block;
-            vertical-align: middle;
-            margin-right: 10px;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-        /* Status Text */
-        #statusText { margin-top: 15px; font-size: 12px; color: #888; display: none; }
+        .btn:active { transform: scale(0.98); }
+        .btn-success { background: #28a745; display: none; }
+        .status { margin-top: 15px; font-size: 14px; color: #28a745; display: none; font-weight: 600; }
     </style>
 </head>
 <body>
 
     <div class="card">
         <div class="icon-box">ID</div>
-        <h2>Student Data</h2>
-        <p>Manage student records offline. Install the app for the best experience.</p>
+        <h1>Student Data App</h1>
+        <p>Install this app on your phone to collect student data and photos offline.</p>
         
-        <button id="installBtn" class="btn btn-install">📲 Install App</button>
-        <button id="openBtn" class="btn btn-open">🚀 Open App</button>
-        
-        <div id="statusText"></div>
+        <button class="btn" id="installBtn" style="display: none;">📲 Install App</button>
+        <button class="btn btn-success" id="openBtn">🚀 Open App</button>
+        <div class="status" id="statusText"></div>
     </div>
 
     <script>
+        let deferredPrompt;
         const installBtn = document.getElementById('installBtn');
         const openBtn = document.getElementById('openBtn');
         const statusText = document.getElementById('statusText');
-        let deferredPrompt;
 
-        // 1. AUTO-REDIRECT CHECK
-        // If the app is already open in "Standalone" (App Mode), go straight to entry page.
+        // 1. CHECK IF ALREADY INSTALLED
         if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
-            window.location.replace("app.html");
-        } else {
-            // We are in a browser tab.
-            // Default assumption: App might be installed, so show "Open App".
-            // If the browser fires 'beforeinstallprompt', we know it's NOT installed, so we swap buttons.
+            installBtn.style.display = 'none';
             openBtn.style.display = 'block';
         }
 
-        // 2. DETECT IF INSTALLABLE
+        // 2. LISTEN FOR INSTALL PROMPT
         window.addEventListener('beforeinstallprompt', (e) => {
-            // Prevent Chrome 67 and earlier from automatically showing the prompt
             e.preventDefault();
-            // Stash the event so it can be triggered later.
             deferredPrompt = e;
-            
-            // It IS installable, so show the Install button instead of Open
-            openBtn.style.display = 'none';
             installBtn.style.display = 'block';
+            openBtn.style.display = 'none';
         });
 
         // 3. HANDLE INSTALL CLICK
         installBtn.addEventListener('click', async () => {
             if (!deferredPrompt) return;
-
-            // UX: Show feedback
-            installBtn.innerHTML = '<div class="loader"></div> Installing...';
             
-            // Show the native prompt
+            installBtn.textContent = 'Installing...';
             deferredPrompt.prompt();
             
-            // Wait for the user to respond to the prompt
             const { outcome } = await deferredPrompt.userChoice;
             
             if (outcome === 'accepted') {
                 console.log('User accepted the install prompt');
-                // The 'appinstalled' event will fire next
             } else {
                 console.log('User dismissed the install prompt');
-                installBtn.textContent = "📲 Install App"; // Reset text
+                installBtn.textContent = "📲 Install App"; 
             }
             deferredPrompt = null;
         });
 
         // 4. LISTEN FOR SUCCESSFUL INSTALL
         window.addEventListener('appinstalled', () => {
-            // Hide install, show open
             installBtn.style.display = 'none';
             openBtn.style.display = 'block';
-            
             statusText.style.display = 'block';
             statusText.textContent = "✅ App Installed Successfully!";
             
-            // Optional: Auto-redirect after 1 second
             setTimeout(() => {
                 window.location.href = 'app.html';
             }, 1500);
