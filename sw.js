@@ -1,4 +1,4 @@
-const CACHE_NAME = 'student-data-v4-icon-sync-fix'; // Bumped to v4: fixed icon-192 size + auto-sync on load
+const CACHE_NAME = 'student-data-v5-manifest-fix'; // Bumped to v5: fixed broken manifest.json (stray ``` was making it invalid JSON)
 
 const urlsToCache = [
   './',
