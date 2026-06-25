@@ -1,4 +1,4 @@
-const CACHE_NAME = 'student-data-v5-manifest-fix'; // Bumped to v5: fixed broken manifest.json (stray ``` was making it invalid JSON)
+const CACHE_NAME = 'student-data-v10-sync-and-perf-fix'; // v10: fixed submittedAt corruption + school-edit sync gap, trimmed unused precache assets
 
 const urlsToCache = [
   './',
@@ -17,13 +17,14 @@ const urlsToCache = [
   './icon-192.png',
   './icon-512.png',
 
-  // External Libraries
-  'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  // External Libraries — only what app.html itself uses. xlsx, jszip, jspdf, and
+  // cropperjs were previously precached here too, but they belong to admin.html
+  // (cropperjs isn't referenced anywhere at all) and admin.html isn't even cached
+  // by this service worker. Every teacher's phone was downloading and permanently
+  // storing those libraries for zero benefit — wasted bandwidth and storage on
+  // exactly the low-end Android devices this app needs to be light on.
   'https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js',
-  'https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore-compat.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css'
+  'https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore-compat.js'
 ];
 
 self.addEventListener('install', event => {

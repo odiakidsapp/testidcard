@@ -45,6 +45,15 @@
         <div id="schoolSection" class="hidden">
             <h2 style="text-align:center; color:#0056b3;">School Registration</h2>
             
+            <div class="card" id="restoreCard" style="border: 2px dashed #0056b3;">
+                <label>Already added students before? Restore by UDISE</label>
+                <input type="text" id="restoreUdiseInput" placeholder="Enter UDISE Number (11 digits)" maxlength="11" inputmode="numeric">
+                <button class="btn btn-primary" id="restoreUdiseBtn">🔄 Check & Restore Previous Data</button>
+                <div id="restoreStatus" style="font-size:13px; margin-top:8px; display:none;"></div>
+            </div>
+
+            <div style="text-align:center; color:#999; font-size:13px; margin: 10px 0;">— OR —</div>
+
             <div class="card" id="addSchoolCard">
                 <label>School Details</label>
                 <input type="text" id="newSchoolName" placeholder="Enter School Name">
@@ -56,7 +65,7 @@
                 </div>
                 <div class="row-inputs">
                     <input type="number" id="newPin" placeholder="Pin Code">
-                    <input type="number" id="newUdise" placeholder="UDISE Number">
+                    <input type="text" id="newUdise" placeholder="UDISE Number (11 digits) *" maxlength="11" inputmode="numeric">
                 </div>
                 
                 <label>HM Signature (Photo)</label>
@@ -150,7 +159,7 @@
             </div>
             <div class="row-inputs">
                 <input type="number" id="editSchoolPin" placeholder="Pin Code">
-                <input type="number" id="editSchoolUdise" placeholder="UDISE Number">
+                <input type="text" id="editSchoolUdise" placeholder="UDISE Number (11 digits) *" maxlength="11" inputmode="numeric">
             </div>
             
             <label>Update Signature (Optional)</label>
@@ -226,6 +235,11 @@
             reader.onerror = reject;
         });
 
+        // 🚀 NEW: Escape free-text fields before they go into innerHTML (name, class, roll,
+        // mobile are all user-typed). Doesn't change how any legitimate name/number displays —
+        // it only matters for the handful of HTML-special characters (< > & " ').
+        function escapeHtml(s) { return (s===undefined||s===null?'':String(s)).replace(/[&<>"'`]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c])); }
+
         // 🚀 NEW: Universal Image Compressor to Fix 1MB Firestore Quota Limit
         function compressImageToDataURL(imgElement) {
             return new Promise((resolve) => {
@@ -250,7 +264,15 @@
             });
         }
 
-        // PRELOAD ASSETS FOR PREVIEW
+        // 🚀 NEW: Re-compress an already-stored base64 photo (for legacy records saved before compression existed)
+        function recompressBase64(dataUrl) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(compressImageToDataURL(img));
+                img.onerror = reject;
+                img.src = dataUrl;
+            });
+        }
         async function loadPreviewAssets() {
             try {
                 const f = new FontFace('OdiaFont', await (await fetch('OdiaFont.ttf')).arrayBuffer());
@@ -271,19 +293,48 @@
             if (document.visibilityState === 'visible') syncAllPending();
         });
 
-        function syncAllPending() {
+        async function syncAllPending() {
             if(!db || !navigator.onLine) return;
             const btn = document.getElementById('manualSyncBtn');
-            if(btn) btn.textContent = "Syncing...";
-            
+
             const tx = db.transaction(['students'], 'readonly');
-            tx.objectStore('students').getAll().onsuccess = e => {
-                const unsynced = e.target.result.filter(s => !s.synced);
-                if(unsynced.length === 0 && btn) {
-                    btn.textContent = "✅ All Synced";
-                    setTimeout(() => btn.textContent = "🔄 Sync Pending", 2000);
+            tx.objectStore('students').getAll().onsuccess = async e => {
+                // 🚀 FIX: also pick up already-synced students flagged metaDirty (a school
+                // edit corrected their embedded school fields and that hasn't reached
+                // Firestore yet) — previously only !s.synced records were ever retried.
+                const unsynced = e.target.result.filter(s => !s.synced || s.metaDirty);
+
+                if (unsynced.length === 0) {
+                    if (btn) {
+                        btn.textContent = "✅ All Synced";
+                        setTimeout(() => btn.textContent = "🔄 Sync Pending", 2000);
+                    }
+                    return;
                 }
-                unsynced.forEach(s => syncToFirebase(s));
+
+                // 🚀 NEW: Sync one at a time (not all in parallel) — large legacy photos were overwhelming
+                // weaker devices when fired simultaneously, which is why the button got stuck on "Synchronizing..."
+                let successCount = 0, failCount = 0;
+                for (let i = 0; i < unsynced.length; i++) {
+                    if (btn) btn.textContent = `Syncing ${i + 1}/${unsynced.length}...`;
+                    try {
+                        await syncToFirebase(unsynced[i]);
+                        successCount++;
+                    } catch (err) {
+                        failCount++;
+                        // keep going — one bad record should never block the rest of the queue
+                    }
+                }
+
+                if (btn) {
+                    if (failCount === 0) {
+                        btn.textContent = "✅ All Synced";
+                    } else {
+                        btn.textContent = `⚠️ ${successCount} synced, ${failCount} failed`;
+                        console.error(`${failCount} record(s) failed to sync. Check console errors above for details.`);
+                    }
+                    setTimeout(() => btn.textContent = "🔄 Sync Pending", 3000);
+                }
             };
         }
 
@@ -309,6 +360,76 @@
             };
         }
 
+        document.getElementById('restoreUdiseBtn').onclick = async () => {
+            const udise = document.getElementById('restoreUdiseInput').value.trim();
+            const statusEl = document.getElementById('restoreStatus');
+            const btn = document.getElementById('restoreUdiseBtn');
+
+            if (!udise) return alert("Please enter the UDISE Number to restore.");
+            if (!/^\d{11}$/.test(udise)) return alert("UDISE Number must be exactly 11 digits. Please check and re-enter.");
+            if (!navigator.onLine) return alert("You need an internet connection to restore previous data.");
+
+            statusEl.style.display = 'block';
+            statusEl.style.color = '#0056b3';
+            statusEl.textContent = "Checking server for this UDISE...";
+            btn.disabled = true;
+
+            try {
+                const snapshot = await firestore.collection('students').where('udise', '==', udise).get();
+
+                if (snapshot.empty) {
+                    statusEl.style.color = '#dc3545';
+                    statusEl.textContent = "No records found for this UDISE. Double-check the number, or add the school as new below.";
+                    btn.disabled = false;
+                    return;
+                }
+
+                const docs = snapshot.docs.map(d => ({ id: d.id, data: d.data() }));
+                const first = docs[0].data;
+
+                // Rebuild the school record from the first matching student's embedded school fields
+                const schoolObj = {
+                    name: first.schoolName,
+                    phone: first.hmPhone || '',
+                    block: first.block || '',
+                    district: first.district || '',
+                    pin: first.pin || '',
+                    udise: first.udise || udise,
+                    hmSignature: first.hmSignature || '',
+                    createdAt: Date.now()
+                };
+
+                statusEl.textContent = `Found ${docs.length} student record(s). Restoring...`;
+
+                const tx = db.transaction(['schools', 'students'], 'readwrite');
+                tx.objectStore('schools').put(schoolObj);
+
+                const studentStore = tx.objectStore('students');
+                docs.forEach(({ id, data }) => {
+                    const student = { ...data, id: Number(id), synced: true };
+                    // serverTimestamp() values can't be stored directly in IndexedDB; drop it, it's not needed locally
+                    delete student.submittedAt;
+                    studentStore.put(student);
+                });
+
+                tx.oncomplete = () => {
+                    statusEl.style.color = '#28a745';
+                    statusEl.textContent = `✅ Restored ${docs.length} student(s) successfully!`;
+                    setTimeout(() => enterSchool(schoolObj), 800);
+                };
+                tx.onerror = () => {
+                    statusEl.style.color = '#dc3545';
+                    statusEl.textContent = "Something went wrong while saving locally. Please try again.";
+                    btn.disabled = false;
+                };
+            } catch (err) {
+                console.error(err);
+                statusEl.style.color = '#dc3545';
+                statusEl.textContent = "Could not reach the server. Check your connection and try again.";
+                btn.disabled = false;
+            }
+        };
+
         document.getElementById('addSchoolBtn').onclick = async () => {
             const name = document.getElementById('newSchoolName').value.trim();
             const phone = document.getElementById('newSchoolPhone').value.trim();
@@ -319,6 +440,10 @@
             const signFile = document.getElementById('hmSignInput').files[0];
 
             if(!name) return alert("Enter School Name");
+
+            // 🚀 NEW: UDISE is now mandatory and must be exactly 11 digits
+            if(!udise) return alert("UDISE Number is mandatory. Please enter the 11-digit UDISE code.");
+            if(!/^\d{11}$/.test(udise)) return alert("UDISE Number must be exactly 11 digits. Please check and re-enter.");
             
             // 🚀 NEW: Check for duplicate school name prevent overwrite trap
             const checkTx = db.transaction(['schools'], 'readonly');
@@ -354,9 +479,9 @@
             // 🚀 NEW: Protect offline users from accidentally deleting unsynced records
             const checkTx = db.transaction(['students'], 'readonly');
             checkTx.objectStore('students').getAll().onsuccess = e => {
-                const unsynced = e.target.result.filter(s => !s.synced);
+                const unsynced = e.target.result.filter(s => !s.synced || s.metaDirty);
                 if (unsynced.length > 0) {
-                    alert(`WARNING: You have ${unsynced.length} unsynced students! Please connect to the internet and let them sync before resetting.`);
+                    alert(`WARNING: You have ${unsynced.length} student record(s) not yet fully synced! Please connect to the internet and let them sync before resetting.`);
                     return;
                 }
                 
@@ -404,6 +529,10 @@
 
             if(!newName) return alert("Name cannot be empty");
 
+            // 🚀 NEW: UDISE is mandatory and must be exactly 11 digits, even on edit
+            if(!newUdise) return alert("UDISE Number is mandatory. Please enter the 11-digit UDISE code.");
+            if(!/^\d{11}$/.test(newUdise)) return alert("UDISE Number must be exactly 11 digits. Please check and re-enter.");
+
             const oldName = currentSchoolData.name;
             const updatedSchool = { ...currentSchoolData };
             updatedSchool.name = newName;
@@ -423,24 +552,32 @@
             }
             tx.objectStore('schools').put(updatedSchool);
 
-            // 🚀 NEW: Replaced Cursor Mutation logic with safer getAll() to prevent skipping updates
-            if(oldName !== newName) {
-                const stStore = tx.objectStore('students');
-                const idx = stStore.index('schoolName');
-                idx.getAll(oldName).onsuccess = (e) => {
-                    const studentsToUpdate = e.target.result;
-                    studentsToUpdate.forEach(s => {
-                        s.schoolName = newName;
-                        s.hmSignature = updatedSchool.hmSignature;
-                        s.block = updatedSchool.block;
-                        s.district = updatedSchool.district;
-                        s.pin = updatedSchool.pin;
-                        s.udise = updatedSchool.udise;
-                        s.hmPhone = updatedSchool.phone;
-                        stStore.put(s); 
-                    });
-                };
-            }
+            // 🚀 FIX: This used to only run "if(oldName !== newName)" — meaning a plain
+            // phone/address/signature/UDISE correction (no rename) never touched any student
+            // record at all, local or remote. Now it always runs whenever school details are
+            // saved. Uses the same safer getAll() approach (not cursor mutation) to avoid
+            // skipping updates.
+            const stStore = tx.objectStore('students');
+            const idx = stStore.index('schoolName');
+            idx.getAll(oldName).onsuccess = (e) => {
+                const studentsToUpdate = e.target.result;
+                studentsToUpdate.forEach(s => {
+                    s.schoolName = newName;
+                    s.hmSignature = updatedSchool.hmSignature;
+                    s.block = updatedSchool.block;
+                    s.district = updatedSchool.district;
+                    s.pin = updatedSchool.pin;
+                    s.udise = updatedSchool.udise;
+                    s.hmPhone = updatedSchool.phone;
+                    // 🚀 NEW: Already-synced students need their Firestore copy corrected too
+                    // (previously this never happened at all). Mark for a lightweight
+                    // metadata-only resync — no need to re-upload the photo. Students still
+                    // pending their first sync don't need this; they'll upload the corrected
+                    // data automatically since currentSchoolData is already updated.
+                    if (s.synced) s.metaDirty = true;
+                    stStore.put(s);
+                });
+            };
 
             tx.oncomplete = () => {
                 currentSchool = newName;
@@ -449,6 +586,12 @@
                 document.getElementById('editSchoolModal').style.display = 'none';
                 loadStudents();
                 loadSchools();
+                // 🚀 NEW: Push the metadata-only corrections to Firestore right away if online.
+                // If offline, the same robust pending-queue/retry path (syncAllPending) will
+                // pick these up automatically on reconnect, on visibility change, on app
+                // reload, or via the manual "Sync Pending" button — no separate code path
+                // needed for recovery.
+                syncAllPending();
             };
         };
 
@@ -470,10 +613,10 @@
                     <span class="serial-no">#${students.length - index}</span>
                     <img src="${s.photoBase64 || ''}" class="student-img">
                     <div class="student-info">
-                        <strong>${s.name}</strong><br>
-                        <small>Class: ${s.class} | Roll: ${s.roll}</small><br>
-                        <small>📞 ${s.mobile || 'N/A'}</small>
-                        <div style="font-size:10px; color:${s.synced?'green':'orange'}">${s.synced?'Synced':'Pending'}</div>
+                        <strong>${escapeHtml(s.name)}</strong><br>
+                        <small>Class: ${escapeHtml(s.class)} | Roll: ${escapeHtml(s.roll)}</small><br>
+                        <small>📞 ${escapeHtml(s.mobile || 'N/A')}</small>
+                        <div style="font-size:10px; color:${s.synced?'green':'orange'}">${s.synced ? (s.metaDirty ? 'Updating…' : 'Synced') : 'Pending'}</div>
                     </div>
                     <div class="student-actions">
                         <div class="action-icon edit-icon" onclick="editStudent(${s.id})">✎</div>
@@ -639,8 +782,14 @@
                 photoBase64: base64,
                 photoName: `${Date.now()}.jpg`,
                 synced: false,
-                lastModified: Date.now(), // 🚀 NEW: Tracking updates to support Admin Quick Sync
-                submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+                lastModified: Date.now() // 🚀 NEW: Tracking updates to support Admin Quick Sync
+                // 🚀 FIX: submittedAt is intentionally NOT set here anymore. It used to be
+                // firebase.firestore.FieldValue.serverTimestamp(), but that's a live Firestore
+                // sentinel object — storing it in IndexedDB strips its special type via structured
+                // clone, leaving a plain lookalike object behind. If the device was offline and
+                // this record retried later from IndexedDB, Firestore would write that lookalike
+                // object as the literal field value instead of a real timestamp. It's added fresh,
+                // write-only, at the moment of the actual Firestore call in syncToFirebase().
             };
 
             const tx = db.transaction(['students'], 'readwrite');
@@ -749,24 +898,68 @@
             }
         };
 
-        function syncToFirebase(student) {
-            firestore.collection('students').doc(String(student.id)).set(student)
-            .then(() => {
-                const tx = db.transaction(['students'], 'readwrite');
-                const store = tx.objectStore('students');
+        // Firestore's hard document size limit, with safety margin for the other text fields
+        const FIRESTORE_SAFE_LIMIT = 900 * 1024; // ~900KB
+
+        async function syncToFirebase(student) {
+            try {
+                // 🚀 FIX: A metadata-only resync (school details corrected via Edit School,
+                // already-synced student) only needs the changed fields pushed — no need to
+                // re-send the photo or touch submittedAt at all. Lighter, faster, and uses far
+                // less data than a full re-upload, which matters a lot on weak connections.
+                const isMetaOnlyResync = student.synced && student.metaDirty;
+
+                if (isMetaOnlyResync) {
+                    await firestore.collection('students').doc(String(student.id)).update({
+                        schoolName: student.schoolName,
+                        hmSignature: student.hmSignature,
+                        block: student.block,
+                        district: student.district,
+                        pin: student.pin,
+                        udise: student.udise,
+                        hmPhone: student.hmPhone,
+                        lastModified: Date.now()
+                    });
+                    student.metaDirty = false;
+                } else {
+                    // 🚀 NEW: Detect legacy oversized photos (captured before compression existed) and shrink them first
+                    let payloadSize = new Blob([JSON.stringify(student)]).size;
+                    if (payloadSize > FIRESTORE_SAFE_LIMIT && student.photoBase64) {
+                        console.log(`Student ${student.id} payload is ${(payloadSize/1024/1024).toFixed(2)}MB — recompressing legacy photo before sync...`);
+                        const shrunk = await recompressBase64(student.photoBase64);
+                        student.photoBase64 = shrunk;
+
+                        // Save the shrunk photo back to IndexedDB permanently — no data lost, just a smaller image
+                        await new Promise((resolve, reject) => {
+                            const tx = db.transaction(['students'], 'readwrite');
+                            tx.objectStore('students').put(student);
+                            tx.oncomplete = resolve;
+                            tx.onerror = reject;
+                        });
+                    }
+
+                    // 🚀 FIX: Build a separate write-only payload for the Firestore call instead
+                    // of mutating `student` — submittedAt (a live FieldValue sentinel) must never
+                    // be written back into IndexedDB. See the note where `student` is constructed
+                    // in the Save Student handler for the full explanation.
+                    const payload = { ...student, submittedAt: firebase.firestore.FieldValue.serverTimestamp() };
+                    await firestore.collection('students').doc(String(student.id)).set(payload);
+                    student.metaDirty = false;
+                }
+
                 student.synced = true;
-                store.put(student);
-                tx.oncomplete = () => {
-                    loadStudents();
-                    const btn = document.getElementById('manualSyncBtn');
-                    if (btn) btn.textContent = "🔄 Sync Pending";
-                };
-            })
-            .catch(err => {
-                console.log("Sync failed, will retry later");
-                const btn = document.getElementById('manualSyncBtn');
-                if (btn) btn.textContent = "🔄 Sync Pending";
-            });
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(['students'], 'readwrite');
+                    tx.objectStore('students').put(student);
+                    tx.oncomplete = resolve;
+                    tx.onerror = reject;
+                });
+                loadStudents();
+            } catch (err) {
+                // 🚀 NEW: Real, visible error logging instead of silent swallow
+                console.error(`Sync failed for student ${student.id} (${student.name || 'unknown'}):`, err);
+                throw err; // let syncAllPending track this as a failure
+            }
         }
     </script>
 </body>

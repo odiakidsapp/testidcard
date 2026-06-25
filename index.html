@@ -10,6 +10,26 @@
         if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
             window.location.replace('app.html');
         }
+
+        // 🚀 NEW (Step 5): Standards-based "already installed" detection for browsers that
+        // support getInstalledRelatedApps() (Chrome/Edge on Android & desktop today). If the
+        // PWA is already installed, skip the landing/install page and go straight into the
+        // app. There is currently no web-platform API that lets a normal browser tab launch
+        // an *already-running or separate* installed PWA window directly — this is a
+        // deliberate browser security boundary, not something library/hack code can safely
+        // work around — so the most reliable standards-based behavior available is to detect
+        // the install and navigate straight to app.html ourselves.
+        //
+        // Browsers without this API (Safari, Firefox, older Chromium) simply don't enter this
+        // block at all and fall through to the existing install-prompt UI below, completely
+        // unchanged — this degrades gracefully with zero behavior change for them.
+        if ('getInstalledRelatedApps' in navigator) {
+            navigator.getInstalledRelatedApps().then(apps => {
+                if (apps.length > 0) {
+                    window.location.replace('app.html');
+                }
+            }).catch(() => { /* ignore — fall back to the normal install page below */ });
+        }
     </script>
     <style>
         body {
