@@ -1,4 +1,4 @@
-const CACHE_NAME = 'student-data-v2-new-repo'; // Bumped version to force cache refresh!
+const CACHE_NAME = 'student-data-v3-new-repo'; // Bumped to v3 to force cache refresh!
 
 const urlsToCache = [
   './',
@@ -9,7 +9,7 @@ const urlsToCache = [
   // UNCOMMENT the next line if you upload admin.html to the same repository
   // './admin.html', 
 
-  // 🚀 NEW: Fonts and Backgrounds cached for completely offline preview generation
+  // Fonts and Backgrounds cached for completely offline preview generation
   './OdiaFont.ttf',
   './background.png',
 
@@ -37,12 +37,12 @@ self.addEventListener('install', event => {
   );
 });
 
-// 🚀 NEW: Dynamic Network-First fallback so bugs get patched on users' phones immediately
+// Dynamic Network-First fallback so bugs get patched on users' phones immediately
 self.addEventListener('fetch', event => {
   const req = event.request;
 
   // Use Network-First for HTML files (gets bug fixes instantly)
-  if (req.headers.get('accept').includes('text/html')) {
+  if (req.headers.get('accept') && req.headers.get('accept').includes('text/html')) {
     event.respondWith(
       fetch(req)
         .then(networkResponse => {
