@@ -1,4 +1,4 @@
-const CACHE_NAME = 'student-data-v3-new-repo'; // Bumped to v3 to force cache refresh!
+const CACHE_NAME = 'student-data-v4-icon-sync-fix'; // Bumped to v4: fixed icon-192 size + auto-sync on load
 
 const urlsToCache = [
   './',

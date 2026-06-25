@@ -212,7 +212,12 @@
                 st.createIndex('schoolName', 'schoolName', {unique:false});
             }
         };
-        req.onsuccess = e => { db = e.target.result; loadSchools(); };
+        req.onsuccess = e => {
+            db = e.target.result;
+            loadSchools();
+            // 🚀 NEW: Auto-sync any pending students as soon as the app/db is ready (covers page reload)
+            if (navigator.onLine) syncAllPending();
+        };
 
         const blobToBase64 = blob => new Promise((resolve, reject) => {
             const reader = new FileReader();
